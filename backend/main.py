@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import socketio
 
+
 from config import PORT
 from api.userApi import userRouter
 from api.chatApi import chatRouter
