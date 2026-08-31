@@ -30,9 +30,11 @@ print(f"[INFO] Initializing Groq LLMs...")
 # )
 fast_llm = ChatGroq(
     api_key=GROQ_API_KEY,
-    model="llama-3.1-8b-instant",
+    model="openai/gpt-oss-120b",
     temperature=0,
-    max_tokens=64,
+    max_tokens=96,
+    reasoning_effort="low",
+    reasoning_format="hidden",
 )
 
 # main_llm — for final answer generation only
@@ -50,9 +52,11 @@ fast_llm = ChatGroq(
 # )
 main_llm = ChatGroq(
     api_key=GROQ_API_KEY,
-    model="llama-3.3-70b-versatile",
+    model="openai/gpt-oss-120b",
     temperature=0.1,
-    max_tokens=1024,
+    max_tokens=2048,
+    reasoning_effort="medium",
+    reasoning_format="hidden",
 )
 
 # backward compat — keep llm for quiz/planner imports

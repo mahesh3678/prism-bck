@@ -56,9 +56,11 @@ class QuizResultRequest(BaseModel):
 
 quiz_llm = ChatGroq(
     api_key=GROQ_API_KEY,
-    model="llama-3.3-70b-versatile",
+    model="openai/gpt-oss-120b",
     temperature=0.3,
     max_tokens=4000,
+    reasoning_effort="medium",
+    reasoning_format="hidden",
 )
 
 # QuizRequest — for GENERATING a quiz (only these fields needed)

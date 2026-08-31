@@ -3,7 +3,7 @@ from typing import Optional
 
 class User(BaseModel):
     firstName: str
-    lastName: str
+    lastName: Optional[str] = None
     email: str
     role: str                        # "student"
     examTarget: str                  # "JEE" or "NEET"
