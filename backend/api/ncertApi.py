@@ -20,9 +20,11 @@ ncertRouter = APIRouter()
 
 ncert_llm = ChatGroq(
     api_key=GROQ_API_KEY,
-    model="llama-3.3-70b-versatile",
+    model="openai/gpt-oss-120b",
     temperature=0.1,
     max_tokens=6000,
+    reasoning_effort="medium",
+    reasoning_format="hidden",
 )
 
 DEFAULT_NCERT_CHAPTERS = {
