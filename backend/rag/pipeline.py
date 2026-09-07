@@ -4,13 +4,14 @@
 
 from rag.graph import rag_graph
 from rag.agent_state import AgentState
-from typing import List
+from typing import List, Callable, Optional
 
 def run_rag_pipeline(
     query: str,
     exam_target: str = "",
     user_context: str = "",
-    recent_messages: List[dict] = None
+    recent_messages: List[dict] = None,
+    emit_progress: Optional[Callable] = None
 ) -> dict:
     """
     Runs agentic RAG pipeline with personalization.
@@ -57,6 +58,7 @@ def run_rag_pipeline(
         "retrieval_needed": False,
         "grade_passed": False,
         "blocked": False,
+        "emit_progress": emit_progress,
     }
 
     # run through LangGraph

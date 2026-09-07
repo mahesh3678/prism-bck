@@ -22,6 +22,7 @@ from api.studyChatRestApi import studyChatRouter
 from api.studyChatApi import sio
 # main.py — after sio is created, before ASGIApp wrapping
 from api.battleApi import battleRouter, register_battle_events
+from api.agentTraceApi import register_trace_events
 from api.ncertApi import ncertRouter
 
 from database.mongodb import connect_db, close_db
@@ -72,6 +73,7 @@ def health_check():
 
 # register battle socket events on same sio instance
 register_battle_events(sio)
+register_trace_events(sio)
 
 app = socketio.ASGIApp(
     socketio_server=sio,

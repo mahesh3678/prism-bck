@@ -6,13 +6,14 @@
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 from rag.pipeline import run_rag_pipeline
 from database.mongodb import get_db
 import uuid
 from datetime import datetime
 import asyncio
 from api.leaderboardApi import update_leaderboard_points
+from api.studyChatApi import sio
 import logging
 
 chatRouter = APIRouter()
@@ -28,6 +29,7 @@ class ChatRequest(BaseModel):
     examTarget: str
     sessionId: str 
     recentMessages: List[dict] = []   
+    traceId: Optional[str] = None
     
     # which session this message belongs to
 
@@ -102,19 +104,29 @@ async def chat(request: ChatRequest):
         }
     )
 
-    # run pipeline in executor so we can check disconnect
-    loop = asyncio.get_event_loop()
+    # The graph is synchronous, so it runs in a worker thread. Events are
+    # safely handed back to this live event loop as each graph node changes.
+    loop = asyncio.get_running_loop()
+    trace_snapshot = {}
+
+    def emit_progress(event: dict):
+        if not request.traceId:
+            return
+        node = event.get("node")
+        if node:
+            trace_snapshot[node] = event
+        future = asyncio.run_coroutine_threadsafe(
+            sio.emit("agent_trace", {**event, "traceId": request.traceId}, room=f"trace_{request.traceId}"),
+            loop,
+        )
+        # Surface scheduling errors in server logs without ever failing RAG.
+        future.add_done_callback(lambda completed: completed.exception() if not completed.cancelled() else None)
 
     try:
-        # run blocking RAG pipeline in thread pool
-        result = await loop.run_in_executor(
-                    None,
-                    run_rag_pipeline,
-                    request.query,
-                    request.examTarget,
-                    user_context,
-                    request.recentMessages
-        ) 
+        result = await asyncio.to_thread(
+            run_rag_pipeline, query, request.examTarget, user_context,
+            request.recentMessages, emit_progress
+        )
         
     except Exception as e:
         print(f"[API: chat] Pipeline error: {e}")
@@ -132,6 +144,7 @@ async def chat(request: ChatRequest):
         "role": "assistant",
         "content": result["answer"],
         "sources": result["sources"],
+        "trace": trace_snapshot,
         "timestamp": now()
     }
 
@@ -157,7 +170,8 @@ async def chat(request: ChatRequest):
         "message": "success",
         "payload": {
             "answer": result["answer"],
-            "sources": result["sources"]
+            "sources": result["sources"],
+            "trace": trace_snapshot
         }
     }
 

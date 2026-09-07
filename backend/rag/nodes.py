@@ -33,8 +33,6 @@ fast_llm = ChatGroq(
     model="openai/gpt-oss-120b",
     temperature=0,
     max_tokens=96,
-    reasoning_effort="low",
-    reasoning_format="hidden",
 )
 
 # main_llm — for final answer generation only
@@ -54,9 +52,7 @@ main_llm = ChatGroq(
     api_key=GROQ_API_KEY,
     model="openai/gpt-oss-120b",
     temperature=0.1,
-    max_tokens=2048,
-    reasoning_effort="medium",
-    reasoning_format="hidden",
+    max_tokens=1024,
 )
 
 # backward compat — keep llm for quiz/planner imports
@@ -86,6 +82,17 @@ else:
         print("[WARN] No documents found in data folder. Vector store is empty.")
 
 print("[INFO] Vector store ready.")
+
+
+def _emit(state: AgentState, node: str, status: str, detail: str, data=None):
+    """Publish a presentation-safe node update; absent callbacks are a no-op."""
+    callback = state.get("emit_progress")
+    if not callback:
+        return
+    try:
+        callback({"node": node, "status": status, "detail": detail, "data": data or {}})
+    except Exception as error:
+        print(f"[TRACE EMIT ERROR] {error}")
 
 
 # ─────────────────────────────────────────────
@@ -202,10 +209,12 @@ def router_node(state: AgentState) -> AgentState:
     query_lower = query.lower()
 
     print(f"[NODE: router] Query: '{query[:60]}'")
+    _emit(state, "router", "active", "Understanding your question")
 
     # content safety check
     blocked_keywords = ["porn", "sex", "drugs", "hack", "weapon", "nude", "xxx", "bomb", "illegal"]
     if any(kw in query_lower for kw in blocked_keywords):
+        _emit(state, "router", "done", "This request cannot be processed", {"retrieval_needed": False})
         return {**state, "retrieval_needed": False,
                 "generation_count": 0, "grade_passed": False, "blocked": True}
 
@@ -223,6 +232,7 @@ def router_node(state: AgentState) -> AgentState:
 
     if is_direct:
         print(f"[NODE: router] Direct (no LLM needed): '{query}'")
+        _emit(state, "router", "done", "Quick response — no material search needed", {"retrieval_needed": False})
         return {**state, "retrieval_needed": False,
                 "generation_count": 0, "grade_passed": False, "blocked": False}
 
@@ -239,6 +249,7 @@ def router_node(state: AgentState) -> AgentState:
 
     decision = response.content.strip().lower()[:15]
     retrieve = "retrieve" in decision
+    _emit(state, "router", "done", "Academic question — searching study material" if retrieve else "Quick response — no search needed", {"retrieval_needed": retrieve})
     print(f"[NODE: router] Decision: '{decision}' → retrieve={retrieve}")
 
     return {
@@ -269,6 +280,7 @@ def retrieve_node(state: AgentState) -> AgentState:
     query = state.get("rewritten_query") or state["query"]
     exam_target = state.get("examTarget", "")
     conversation = state.get("conversationContext", "")
+    _emit(state, "retrieve", "active", "Finding the most useful study sections")
 
     # if follow-up query, extract topic from conversation
     followup_words = ["next", "continue", "more", "explain", "further", "previous", "that", "point", "above", "mentioned", "guidance", "elaborate"]
@@ -309,6 +321,8 @@ def retrieve_node(state: AgentState) -> AgentState:
 
     print(f"[NODE: retrieve] Retrieved {len(documents)} document chunks.")
     print(f"[NODE: retrieve] Sources: {sources}")
+    previews = [" ".join(document.split())[:150] for document in documents[:3]]
+    _emit(state, "retrieve", "done", f"Found {len(documents)} relevant sections", {"sources": sources[:5], "chunkCount": len(documents), "previews": previews})
 
     return {
         **state,
@@ -331,29 +345,21 @@ def grade_node(state: AgentState) -> AgentState:
     generation_count = state["generation_count"]
 
     print(f"[NODE: grade] Grading {len(documents)} docs...")
+    _emit(state, "grade", "active", "Checking whether the evidence answers your question")
 
     if not documents:
+        _emit(state, "grade", "done", "No useful sections found — trying a better search", {"passed": False, "attempt": generation_count + 1})
         return {**state, "grade_passed": False,
                 "generation_count": generation_count + 1}
 
-    context_preview = "\n\n".join(documents[:2])[:800]  # cap input
+    context_preview = "\n\n".join(documents[:6])[:2400]
 
-    system_prompt = f"""You are Prism — expert AI tutor for JEE and NEET preparation.
-
-When creating diagrams, flowcharts, UML, or any visual structure:
-- Use Mermaid.js syntax wrapped in ```mermaid ... ``` code blocks
-- For flowcharts: use graph TD or graph LR
-- For sequence diagrams: use sequenceDiagram
-- For class diagrams: use classDiagram
-- NEVER use ASCII art (+---+, | text |) for diagrams — always use Mermaid
-
-Example for a process diagram:
-```mermaidgraph TD
-A[Start] --> B[Step 1]
-B --> C[Step 2]
-C --> D[End]
-
-For all other content use markdown formatting with LaTeX math."""
+    system_prompt = """You are a relevance grader for a JEE/NEET study assistant.
+Decide whether the provided documents contain enough information to answer the student's query.
+Reply with exactly one word: yes or no.
+Reply yes when the documents directly discuss the topic, its terminology, mechanism, formula,
+or a closely related subtopic that can support a useful answer. Do not require an exact wording match.
+Reply no only when the documents are clearly unrelated."""
 
     response = fast_llm.invoke([        # ← fast_llm
         SystemMessage(content=system_prompt),
@@ -362,6 +368,7 @@ For all other content use markdown formatting with LaTeX math."""
 
     grade = response.content.strip().lower()[:5]
     passed = "yes" in grade
+    _emit(state, "grade", "done", "Evidence looks relevant — preparing the answer" if passed else "Evidence needs a better search — refining the query", {"passed": passed, "attempt": generation_count if passed else generation_count + 1})
     print(f"[NODE: grade] Grade: '{grade}' → passed={passed}")
 
     return {
@@ -382,6 +389,7 @@ def rewrite_node(state: AgentState) -> AgentState:
     query = state["query"]
     conversation = state.get("conversationContext", "")
     print(f"[NODE: rewrite] Rewriting: '{query[:60]}'")
+    _emit(state, "rewrite", "active", "Refining the search query")
 
     # include conversation context so the rewriter understands follow-ups
     conv_hint = ""
@@ -399,6 +407,7 @@ Return ONLY the rewritten query."""
     ])
 
     rewritten = response.content.strip()[:300]
+    _emit(state, "rewrite", "done", "Search refined — checking again", {"rewrittenQuery": rewritten})
     print(f"[NODE: rewrite] Rewritten: '{rewritten[:60]}'")
     return {**state, "rewritten_query": rewritten}
 
@@ -413,6 +422,7 @@ Return ONLY the rewritten query."""
 def generate_node(state: AgentState) -> AgentState:
     # blocked content check
     if state.get("blocked"):
+        _emit(state, "generate", "done", "Response ready")
         return {**state,
                 "answer": "I'm sorry, I can only help with JEE and NEET exam preparation topics.",
                 "sources": []}
@@ -424,6 +434,7 @@ def generate_node(state: AgentState) -> AgentState:
     conversation = state.get("conversationContext", "")
 
     print(f"[NODE: generate] Generating for: '{query[:60]}'")
+    _emit(state, "generate", "active", "Writing a clear answer from verified material")
 
     context = "\n\n---\n\n".join(documents) if documents else "No context available."
 
@@ -436,13 +447,15 @@ def generate_node(state: AgentState) -> AgentState:
 
 
     system_prompt = f"""You are Prism — expert AI tutor for JEE and NEET preparation.
-Answer using ONLY the provided context. Format using markdown:
+Answer using ONLY the provided context. Write for a competitive-exam student: simple, direct, and step by step.
+Use markdown only. Never output HTML tags such as <br>, <p>, or <div>.
 - **bold** for key terms
-- Numbered steps for derivations  
+- Clear headings for each idea
+- Numbered steps for mechanisms and derivations
 - $formula$ for inline math (LaTeX)
 - $$formula$$ for block equations
 - Bullet points for lists
-- Tables where helpful
+- Do not use tables for explanations; use bullets or numbered steps instead
 
 If the student says 'next topic', 'continue', or similar — continue from where you left off in the conversation.
 Never make up information not in the context.{personalization}"""
@@ -463,6 +476,7 @@ Provide a clear, well-formatted answer. If this is a follow-up, continue natural
     ])
 
     answer = response.content.strip()
+    _emit(state, "generate", "done", "Answer ready", {"length": len(answer), "preview": answer[:180]})
     print(f"[NODE: generate] Answer: {len(answer)} chars")
     return {**state, "answer": answer, "sources": sources}
 
@@ -477,12 +491,14 @@ Provide a clear, well-formatted answer. If this is a follow-up, continue natural
 def direct_generate_node(state: AgentState) -> AgentState:
     # blocked content
     if state.get("blocked"):
+        _emit(state, "generate", "done", "Response ready")
         return {**state,
                 "answer": "I'm sorry, I can only help with JEE and NEET exam preparation.",
                 "sources": []}
 
     query = state["query"]
     print(f"[NODE: direct] Answering directly: '{query[:60]}'")
+    _emit(state, "generate", "active", "Composing a quick response")
 
     system_prompt = """You are Prism — friendly JEE/NEET prep assistant.
 For greetings, respond warmly and briefly. Guide the student to ask academic questions.
@@ -494,6 +510,7 @@ Keep response under 3 sentences."""
     ])
 
     answer = response.content.strip()
+    _emit(state, "generate", "done", "Answer ready", {"length": len(answer), "preview": answer[:180]})
     print(f"[NODE: direct] Done.")
     return {**state, "answer": answer, "sources": []}
 

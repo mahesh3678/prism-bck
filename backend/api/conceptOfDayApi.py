@@ -112,6 +112,11 @@ def safe_json_parse(text: str) -> dict:
     return None
 
 
+def is_fallback_concept(concept: dict) -> bool:
+    """Identify placeholder concepts so generation failures are not cached."""
+    return concept.get("coreIdea") == "Loading details..."
+
+
 async def generate_concept_question(topic: str, exam_target: str, context: str) -> dict:
     """
     Generates one MCQ — uses plain text formulas to avoid LaTeX JSON issues.
@@ -230,9 +235,13 @@ async def getConceptOfDay(exam_target: str):
         {"_id": 0}
     )
 
-    if existing:
+    if existing and not is_fallback_concept(existing):
         print(f"[ConceptOfDay] Serving cached concept for {today}")
         return {"message": "concept", "payload": existing}
+
+    if existing:
+        print(f"[ConceptOfDay] Removing cached fallback for {today} — {exam_target}")
+        await db.conceptofday.delete_one({"date": today, "examTarget": exam_target})
 
     # generate new concept
     print(f"[ConceptOfDay] Generating new concept for {today} — {exam_target}")
@@ -249,8 +258,9 @@ async def getConceptOfDay(exam_target: str):
     concept["examTarget"] = exam_target
     concept["generatedAt"] = now()
 
-    # save to MongoDB
-    await db.conceptofday.insert_one(concept)
+    # Never cache a fallback; a later request should be able to retry generation.
+    if not is_fallback_concept(concept):
+        await db.conceptofday.insert_one(concept)
 
     # return without _id
     concept_out = {k: v for k, v in concept.items() if k != "_id"}

@@ -3,7 +3,7 @@
 # every node reads from and writes to this state
 # think of it like req/res in Express — carries data across the pipeline
 
-from typing import TypedDict, List, Optional
+from typing import TypedDict, List, Optional, Callable
 
 class AgentState(TypedDict):
     """
@@ -30,3 +30,4 @@ class AgentState(TypedDict):
     retrieval_needed: bool
     grade_passed: bool
     blocked: bool
+    emit_progress: Optional[Callable]
