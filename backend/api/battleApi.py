@@ -164,6 +164,42 @@ def register_battle_events(sio):
 
         print(f"[Battle] {user_id} joined room {room_id}")
 
+    @sio.event
+    async def sync_battle_room(sid, data):
+        """
+        Client declares active presence in a room. Use this to restore state on reconnect or refresh.
+        """
+        from api.studyChatApi import socket_to_user
+        user_id = socket_to_user.get(sid)
+        room_id = data.get("roomId")
+        if not user_id or not room_id:
+            return
+
+        db = get_battle_db()
+        room = await db.battle_rooms.find_one({"roomId": room_id}, {"_id": 0})
+        
+        if not room:
+            return
+            
+        # Ensure socket is in the room
+        await sio.enter_room(sid, f"battle_{room_id}")
+        
+        # Send current room state to the reconnecting socket
+        await sio.emit("room_updated", {"room": room}, to=sid)
+        
+        # If battle already active, restore them directly
+        if room.get("status") == "active" and "questions" in room:
+            current_idx = int(room.get("currentQuestion", 0))
+            if current_idx < len(room["questions"]):
+                await sio.emit("battle_started", {
+                    "roomId": room_id,
+                    "question": room["questions"][current_idx],
+                    "questionIndex": current_idx,
+                    "totalQuestions": len(room["questions"]),
+                    "useTimer": room.get("useTimer", True),
+                    "timePerQuestion": room.get("timePerQuestion", 30),
+                    "startTime": room.get("questionStartTime") or room.get("startTime")
+                }, to=sid)
 
     @sio.event
     async def start_battle(sid, data):
@@ -743,6 +779,17 @@ async def getRoom(roomId: str):
         {"roomId": roomId}, {"_id": 0, "questions": 0}
     )
     return {"message": "room", "payload": room}
+
+
+@battleRouter.get("/battle/rooms/active/{userId}")
+async def getActiveBattleRoom(userId: str):
+    """Get the currently active/waiting room for a user to restore state."""
+    db = get_battle_db()
+    room = await db.battle_rooms.find_one(
+        {"members.userId": userId, "status": {"$in": ["waiting", "generating", "countdown", "active"]}},
+        {"_id": 0, "questions": 0}
+    )
+    return {"message": "active room", "payload": room}
 
 
 @battleRouter.get("/battle/history/{userId}")
